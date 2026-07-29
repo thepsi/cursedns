@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,19 +114,123 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, n
 		h.Trace("query to %s (%s) returned %s, %d answer(s), %d authority, %d additional",
 			ns.Name, ns.Addr, dns.RcodeToString[resp.Rcode], len(resp.Answer), len(resp.Ns), len(resp.Extra))
 
-		if resp.Rcode == dns.RcodeSuccess && len(resp.Answer) > 0 {
-			h.cache.Set(name, qtype, dns.ClassINET, resp.Answer)
+		answer, nsRRs, extra, zone := filterInBailiwick(name, resp.Answer, resp.Ns, resp.Extra)
+		if discarded := (len(resp.Answer) + len(resp.Ns) + len(resp.Extra)) - (len(answer) + len(nsRRs) + len(extra)); discarded > 0 {
+			h.Trace("discarded %d out-of-bailiwick record(s) from %s (%s)", discarded, ns.Name, ns.Addr)
+		}
+
+		if resp.Rcode == dns.RcodeSuccess && len(answer) > 0 {
+			h.cache.Set(name, qtype, dns.ClassINET, answer)
+		}
+		if len(nsRRs) > 0 {
+			h.cache.Set(zone, dns.TypeNS, dns.ClassINET, nsRRs)
+		}
+		for key, rrs := range groupByNameType(extra) {
+			h.cache.Set(key.name, key.qtype, dns.ClassINET, rrs)
 		}
 
 		return &LookupResult{
 			RCode:  resp.Rcode,
-			Answer: resp.Answer,
-			Ns:     resp.Ns,
-			Extra:  resp.Extra,
+			Answer: answer,
+			Ns:     nsRRs,
+			Extra:  extra,
 		}, nil
 	}
 
 	return nil, fmt.Errorf("lookup %s %s: all nameservers failed: %w", name, dns.TypeToString[qtype], lastErr)
+}
+
+// nameType groups records by owner name and type, for caching each glue
+// record under its own cache key.
+type nameType struct {
+	name  string
+	qtype uint16
+}
+
+func groupByNameType(rrs []dns.RR) map[nameType][]dns.RR {
+	groups := make(map[nameType][]dns.RR)
+	for _, rr := range rrs {
+		key := nameType{name: rr.Header().Name, qtype: rr.Header().Rrtype}
+		groups[key] = append(groups[key], rr)
+	}
+	return groups
+}
+
+// filterInBailiwick discards records that a nameserver had no authority to
+// supply, guarding against an off-path or compromised server using its
+// response to inject unrelated records into the cache:
+//
+//   - answer records must belong to name itself, or to a CNAME chain
+//     rooted at name;
+//   - ns records must share a single owner name (the delegated zone) that
+//     is name or an ancestor of it;
+//   - extra (glue) records must fall at or below that delegated zone.
+//
+// It returns the filtered sections along with the delegated zone name
+// found in ns, if any.
+//
+// The DNS spec does not mandate that a CNAME chain's records appear in any
+// particular order within the answer section (this has caused at least one
+// real resolver outage when an upstream silently reordered its answers), so
+// the chain is followed by repeatedly scanning the remaining records for
+// the current expected name rather than assuming sequential order.
+func filterInBailiwick(name string, answer, ns, extra []dns.RR) (filteredAnswer, filteredNs, filteredExtra []dns.RR, zone string) {
+	remaining := append([]dns.RR(nil), answer...)
+	expect := name
+	for {
+		var matched, rest []dns.RR
+		for _, rr := range remaining {
+			if strings.EqualFold(rr.Header().Name, expect) {
+				matched = append(matched, rr)
+			} else {
+				rest = append(rest, rr)
+			}
+		}
+		if len(matched) == 0 {
+			break
+		}
+		filteredAnswer = append(filteredAnswer, matched...)
+		remaining = rest
+
+		var next string
+		for _, rr := range matched {
+			if cname, ok := rr.(*dns.CNAME); ok {
+				next = cname.Target
+				break
+			}
+		}
+		if next == "" {
+			break
+		}
+		expect = next
+	}
+
+	for _, rr := range ns {
+		nsRR, ok := rr.(*dns.NS)
+		if !ok {
+			continue
+		}
+		owner := nsRR.Header().Name
+		if !dns.IsSubDomain(owner, name) {
+			continue // owner is not name or an ancestor of it
+		}
+		if zone == "" {
+			zone = owner
+		} else if !strings.EqualFold(owner, zone) {
+			continue // inconsistent delegation owner within one response
+		}
+		filteredNs = append(filteredNs, rr)
+	}
+
+	if zone != "" {
+		for _, rr := range extra {
+			if dns.IsSubDomain(zone, rr.Header().Name) {
+				filteredExtra = append(filteredExtra, rr)
+			}
+		}
+	}
+
+	return filteredAnswer, filteredNs, filteredExtra, zone
 }
 
 func (h *requestHelper) RootHints() []NameServer {

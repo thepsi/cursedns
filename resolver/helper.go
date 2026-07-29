@@ -39,19 +39,28 @@ type LookupResult struct {
 // A Helper is only valid for the lifetime of the request it was created
 // for; a Handler must not retain one past its Handle call returning.
 type Helper interface {
-	// Lookup resolves a single (name, qtype) question. It first checks the
-	// shared cache; on a miss, it queries each of nameservers in turn
-	// (non-recursively) until one responds, caches any answer received,
-	// and returns the result.
+	// Lookup resolves a single (name, qtype) question using nameservers,
+	// which the caller asserts are authoritative for zone (a suffix of, or
+	// equal to, name). It first checks the shared cache; on a miss, it
+	// queries each of nameservers in turn (non-recursively) until one
+	// responds, caches any answer received, and returns the result.
+	//
+	// Records that a queried server had no authority over zone are
+	// discarded rather than trusted: a response is only ever taken at its
+	// word for names at or below zone. In particular, if a CNAME chain
+	// leads outside zone, the CNAME itself is kept but any further chained
+	// data for the new (out-of-zone) name is not — the caller must issue a
+	// fresh Lookup for it, starting from RootHints or another zone it
+	// already trusts.
 	//
 	// This performs a single resolution step. Handlers implementing
 	// iterative/recursive resolution are expected to call Lookup
 	// repeatedly, walking down the delegation chain using the Ns/Extra
-	// records of each referral.
-	Lookup(ctx context.Context, name string, qtype uint16, nameservers []NameServer) (*LookupResult, error)
+	// records of each referral, narrowing zone as they go.
+	Lookup(ctx context.Context, name string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error)
 
 	// RootHints returns the initial list of root nameservers to begin
-	// resolution from.
+	// resolution from, authoritative for RootZone.
 	RootHints() []NameServer
 
 	// Trace records a line of trace information about the current
@@ -79,8 +88,9 @@ func newRequestHelper(cache *Cache, rootHints []NameServer, client *dns.Client) 
 	}
 }
 
-func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, nameservers []NameServer) (*LookupResult, error) {
+func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error) {
 	name = dns.Fqdn(name)
+	zone = dns.Fqdn(zone)
 
 	if rrs, ok := h.cache.Get(name, qtype, dns.ClassINET); ok {
 		h.Trace("cache hit for %s %s", name, dns.TypeToString[qtype])
@@ -114,7 +124,7 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, n
 		h.Trace("query to %s (%s) returned %s, %d answer(s), %d authority, %d additional",
 			ns.Name, ns.Addr, dns.RcodeToString[resp.Rcode], len(resp.Answer), len(resp.Ns), len(resp.Extra))
 
-		answer, nsRRs, extra, zone := filterInBailiwick(name, resp.Answer, resp.Ns, resp.Extra)
+		answer, nsRRs, extra, delegatedZone := filterInBailiwick(zone, name, resp.Answer, resp.Ns, resp.Extra)
 		if discarded := (len(resp.Answer) + len(resp.Ns) + len(resp.Extra)) - (len(answer) + len(nsRRs) + len(extra)); discarded > 0 {
 			h.Trace("discarded %d out-of-bailiwick record(s) from %s (%s)", discarded, ns.Name, ns.Addr)
 		}
@@ -123,7 +133,7 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, n
 			h.cache.Set(name, qtype, dns.ClassINET, answer)
 		}
 		if len(nsRRs) > 0 {
-			h.cache.Set(zone, dns.TypeNS, dns.ClassINET, nsRRs)
+			h.cache.Set(delegatedZone, dns.TypeNS, dns.ClassINET, nsRRs)
 		}
 		for key, rrs := range groupByNameType(extra) {
 			h.cache.Set(key.name, key.qtype, dns.ClassINET, rrs)
@@ -156,14 +166,19 @@ func groupByNameType(rrs []dns.RR) map[nameType][]dns.RR {
 	return groups
 }
 
-// filterInBailiwick discards records that a nameserver had no authority to
-// supply, guarding against an off-path or compromised server using its
-// response to inject unrelated records into the cache:
+// filterInBailiwick discards records that a nameserver, trusted only for
+// zone, had no authority to supply — guarding against an off-path or
+// compromised server using its response to inject records for unrelated
+// names, either directly or riding along on a CNAME chain:
 //
-//   - answer records must belong to name itself, or to a CNAME chain
-//     rooted at name;
+//   - answer records are accepted while following the CNAME chain rooted
+//     at name, but only for as long as each successive name in that chain
+//     remains at or below zone; a CNAME out of zone is kept (its owner is
+//     still in zone), but nothing answering for its out-of-zone target is;
 //   - ns records must share a single owner name (the delegated zone) that
-//     is name or an ancestor of it;
+//     is at or below zone, and is name or an ancestor of it — a referral
+//     can only narrow the zone already being trusted, never redirect
+//     outside it;
 //   - extra (glue) records must fall at or below that delegated zone.
 //
 // It returns the filtered sections along with the delegated zone name
@@ -174,10 +189,10 @@ func groupByNameType(rrs []dns.RR) map[nameType][]dns.RR {
 // real resolver outage when an upstream silently reordered its answers), so
 // the chain is followed by repeatedly scanning the remaining records for
 // the current expected name rather than assuming sequential order.
-func filterInBailiwick(name string, answer, ns, extra []dns.RR) (filteredAnswer, filteredNs, filteredExtra []dns.RR, zone string) {
+func filterInBailiwick(zone, name string, answer, ns, extra []dns.RR) (filteredAnswer, filteredNs, filteredExtra []dns.RR, delegatedZone string) {
 	remaining := append([]dns.RR(nil), answer...)
 	expect := name
-	for {
+	for dns.IsSubDomain(zone, expect) {
 		var matched, rest []dns.RR
 		for _, rr := range remaining {
 			if strings.EqualFold(rr.Header().Name, expect) {
@@ -211,26 +226,29 @@ func filterInBailiwick(name string, answer, ns, extra []dns.RR) (filteredAnswer,
 			continue
 		}
 		owner := nsRR.Header().Name
+		if !dns.IsSubDomain(zone, owner) {
+			continue // claims authority outside the zone this server was trusted for
+		}
 		if !dns.IsSubDomain(owner, name) {
 			continue // owner is not name or an ancestor of it
 		}
-		if zone == "" {
-			zone = owner
-		} else if !strings.EqualFold(owner, zone) {
+		if delegatedZone == "" {
+			delegatedZone = owner
+		} else if !strings.EqualFold(owner, delegatedZone) {
 			continue // inconsistent delegation owner within one response
 		}
 		filteredNs = append(filteredNs, rr)
 	}
 
-	if zone != "" {
+	if delegatedZone != "" {
 		for _, rr := range extra {
-			if dns.IsSubDomain(zone, rr.Header().Name) {
+			if dns.IsSubDomain(delegatedZone, rr.Header().Name) {
 				filteredExtra = append(filteredExtra, rr)
 			}
 		}
 	}
 
-	return filteredAnswer, filteredNs, filteredExtra, zone
+	return filteredAnswer, filteredNs, filteredExtra, delegatedZone
 }
 
 func (h *requestHelper) RootHints() []NameServer {

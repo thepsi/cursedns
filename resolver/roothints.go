@@ -2,6 +2,9 @@ package resolver
 
 import "net/netip"
 
+// RootZone is the DNS root zone, the zone RootHints is authoritative for.
+const RootZone = "."
+
 // rootHints is the standard IANA root server hints list
 // (https://www.internic.net/domain/named.root), used as the default
 // starting point for iterative resolution.

@@ -169,7 +169,7 @@ func (s *interactiveSession) printHelp() {
   add-extra <RR>                         add a record to the pending additional section
   pending                                show the pending answer/ns/extra sections
   clear                                  discard the pending sections
-  respond <rcode> [auth]                 return the pending sections as the response, e.g. "respond noerror auth"
+  respond <rcode>                        return the pending sections as the response, e.g. "respond noerror"
   fail [message]                         abandon the query with an error (server responds SERVFAIL)
   help                                   show this help
 
@@ -179,8 +179,8 @@ RRs printed by "lookup" are already in the right format to paste into add-answer
 
 func (s *interactiveSession) printQuery() {
 	q := s.query
-	fmt.Fprintf(s.w, "id=%d name=%s type=%s class=%s rd=%v client=%s proto=%s\n",
-		q.ID, q.Name, dns.TypeToString[q.Type], dns.ClassToString[q.Class], q.RecursionDesired, q.ClientAddr, q.Protocol)
+	fmt.Fprintf(s.w, "id=%d name=%s type=%s class=%s client=%s proto=%s\n",
+		q.ID, q.Name, dns.TypeToString[q.Type], dns.ClassToString[q.Class], q.ClientAddr, q.Protocol)
 }
 
 func (s *interactiveSession) printRootHints() {
@@ -249,20 +249,18 @@ func (s *interactiveSession) addRR(target *[]dns.RR, args []string) error {
 
 func (s *interactiveSession) buildResponse(args []string) (*Response, error) {
 	if len(args) == 0 {
-		return nil, errors.New(`usage: respond <rcode> [auth], e.g. "respond noerror auth"`)
+		return nil, errors.New(`usage: respond <rcode>, e.g. "respond noerror"`)
 	}
 	rcode, ok := dns.StringToRcode[strings.ToUpper(args[0])]
 	if !ok {
 		return nil, fmt.Errorf("unknown rcode %q", args[0])
 	}
-	authoritative := len(args) > 1 && strings.EqualFold(args[1], "auth")
 
 	return &Response{
-		RCode:         rcode,
-		Authoritative: authoritative,
-		Answer:        s.pendingAnswer,
-		Ns:            s.pendingNs,
-		Extra:         s.pendingExtra,
+		RCode:  rcode,
+		Answer: s.pendingAnswer,
+		Ns:     s.pendingNs,
+		Extra:  s.pendingExtra,
 	}, nil
 }
 

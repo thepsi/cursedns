@@ -48,8 +48,7 @@ func (h *StaticHandler) Handle(ctx context.Context, query Query, helper Helper) 
 	}
 
 	return &Response{
-		RCode:         dns.RcodeSuccess,
-		Authoritative: true,
-		Answer:        answer,
+		RCode:  dns.RcodeSuccess,
+		Answer: answer,
 	}, nil
 }

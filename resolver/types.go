@@ -13,7 +13,10 @@ import (
 // Query describes an inbound DNS question, as seen by a Handler.
 //
 // The skeleton only supports (and validates) requests carrying exactly one
-// question, matching how DNS is used in practice.
+// question, matching how DNS is used in practice. It also only ever hands a
+// Handler queries with the RD (recursion desired) bit set - this server
+// only offers a recursive service, so queries without RD are refused
+// (RCODE REFUSED) before reaching a Handler.
 type Query struct {
 	// ID is the original query's DNS message ID. Handlers generally don't
 	// need this (the server takes care of matching it in the response) but
@@ -29,9 +32,6 @@ type Query struct {
 	// Class is the question class, e.g. dns.ClassINET.
 	Class uint16
 
-	// RecursionDesired mirrors the RD bit of the inbound request.
-	RecursionDesired bool
-
 	// ClientAddr is the address the query was received from.
 	ClientAddr netip.AddrPort
 
@@ -43,13 +43,14 @@ type Query struct {
 // reply at a high level. The server takes care of translating this into a
 // real wire-format message (message ID, question section, EDNS0 handling,
 // truncation, etc).
+//
+// The reply's AA bit is always cleared: this server only ever relays
+// answers derived from other, genuinely authoritative nameservers, so it is
+// never itself authoritative for anything it returns.
 type Response struct {
 	// RCode is the response code, e.g. dns.RcodeSuccess. The zero value is
 	// dns.RcodeSuccess.
 	RCode int
-
-	// Authoritative sets the AA bit on the reply.
-	Authoritative bool
 
 	// Answer, Ns and Extra mirror the corresponding sections of a DNS
 	// message (answer / authority / additional).

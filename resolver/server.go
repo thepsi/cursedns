@@ -213,14 +213,28 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 	}
 	question := req.Question[0]
 
+	if !req.RecursionDesired {
+		reply := new(dns.Msg).SetRcode(req, dns.RcodeRefused)
+		s.Logger.Info("request completed",
+			"client", clientAddr,
+			"protocol", protocol,
+			"name", question.Name,
+			"qtype", dns.TypeToString[question.Qtype],
+			"rcode", dns.RcodeToString[reply.Rcode],
+			"outcome", "refused: recursion not desired",
+			"duration", time.Since(start),
+		)
+		s.sendReply(req, reply, protocol, respond)
+		return
+	}
+
 	query := Query{
-		ID:               req.Id,
-		Name:             question.Name,
-		Type:             question.Qtype,
-		Class:            question.Qclass,
-		RecursionDesired: req.RecursionDesired,
-		ClientAddr:       clientAddr,
-		Protocol:         protocol,
+		ID:         req.Id,
+		Name:       question.Name,
+		Type:       question.Qtype,
+		Class:      question.Qclass,
+		ClientAddr: clientAddr,
+		Protocol:   protocol,
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, s.RequestTimeout)
@@ -256,8 +270,6 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 			reply = new(dns.Msg)
 			reply.SetReply(req)
 			reply.Rcode = r.resp.RCode
-			reply.Authoritative = r.resp.Authoritative
-			reply.RecursionAvailable = true
 			reply.Answer = r.resp.Answer
 			reply.Ns = r.resp.Ns
 			reply.Extra = r.resp.Extra
@@ -281,7 +293,15 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 
 // sendReply packs reply, truncating it for UDP if necessary, and sends it
 // via respond.
+//
+// RecursionAvailable is set unconditionally here rather than by each
+// caller: it describes this server's general capability (it always offers
+// recursive service), not the outcome of any particular request, so it
+// belongs on every reply - including error responses like SERVFAIL and
+// REFUSED.
 func (s *Server) sendReply(req, reply *dns.Msg, protocol string, respond func([]byte) error) {
+	reply.RecursionAvailable = true
+
 	if protocol == "udp" {
 		size := dns.MinMsgSize
 		if opt := req.IsEdns0(); opt != nil {
@@ -296,6 +316,7 @@ func (s *Server) sendReply(req, reply *dns.Msg, protocol string, respond func([]
 	if err != nil {
 		s.Logger.Error("failed to pack reply, falling back to servfail", "error", err)
 		reply = new(dns.Msg).SetRcode(req, dns.RcodeServerFailure)
+		reply.RecursionAvailable = true
 		out, err = reply.Pack()
 		if err != nil {
 			s.Logger.Error("failed to pack servfail fallback reply", "error", err)

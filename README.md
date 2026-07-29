@@ -55,7 +55,7 @@ Back in the server's terminal you'll see the query printed, followed by a
 
 ```
 > add-answer example.com. 300 IN A 203.0.113.7
-> respond noerror auth
+> respond noerror
 ```
 
 `dig` will then print the record you supplied.

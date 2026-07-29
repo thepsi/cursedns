@@ -12,6 +12,11 @@ import (
 	"github.com/miekg/dns"
 )
 
+// defaultNegativeTTL bounds negative caching when a response carries no
+// usable (in-bailiwick) SOA record to derive a TTL from - RFC 2308 expects
+// one to be present, but not every server complies.
+const defaultNegativeTTL = 60 * time.Second
+
 // NameServer identifies a single nameserver a Helper can query: its name
 // (for logging/tracing) and the IP address to send queries to.
 type NameServer struct {
@@ -96,6 +101,10 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, z
 		h.Trace("cache hit for %s %s", name, dns.TypeToString[qtype])
 		return &LookupResult{RCode: dns.RcodeSuccess, Answer: rrs}, nil
 	}
+	if rcode, ok := h.cache.GetNegative(name, qtype, dns.ClassINET); ok {
+		h.Trace("negative cache hit for %s %s (%s)", name, dns.TypeToString[qtype], dns.RcodeToString[rcode])
+		return &LookupResult{RCode: rcode}, nil
+	}
 
 	if len(nameservers) == 0 {
 		return nil, fmt.Errorf("lookup %s %s: cache miss and no nameservers provided", name, dns.TypeToString[qtype])
@@ -139,6 +148,20 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, z
 			h.cache.Set(key.name, key.qtype, dns.ClassINET, rrs)
 		}
 
+		switch {
+		case resp.Rcode == dns.RcodeNameError:
+			ttl := negativeTTL(zone, resp.Ns)
+			h.cache.SetNXDomain(name, dns.ClassINET, ttl)
+			h.Trace("caching NXDOMAIN for %s (%s)", name, ttl)
+		case resp.Rcode == dns.RcodeSuccess && len(answer) == 0 && !hasNS(resp.Ns):
+			// No answer and the server didn't even attempt a referral (as
+			// opposed to attempting one that got rejected as
+			// out-of-bailiwick above) - a genuine NODATA response.
+			ttl := negativeTTL(zone, resp.Ns)
+			h.cache.SetNoData(name, qtype, dns.ClassINET, ttl)
+			h.Trace("caching NODATA for %s %s (%s)", name, dns.TypeToString[qtype], ttl)
+		}
+
 		return &LookupResult{
 			RCode:  resp.Rcode,
 			Answer: answer,
@@ -148,6 +171,40 @@ func (h *requestHelper) Lookup(ctx context.Context, name string, qtype uint16, z
 	}
 
 	return nil, fmt.Errorf("lookup %s %s: all nameservers failed: %w", name, dns.TypeToString[qtype], lastErr)
+}
+
+// hasNS reports whether rrs contains any NS record, regardless of
+// bailiwick - used to distinguish a genuine NODATA response (no attempt at
+// a referral) from one where a referral was attempted but rejected as
+// out-of-bailiwick, which should not be cached as if it were NODATA.
+func hasNS(rrs []dns.RR) bool {
+	for _, rr := range rrs {
+		if _, ok := rr.(*dns.NS); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// negativeTTL returns the TTL to use for a negative cache entry, per
+// RFC 2308: the smaller of the zone's SOA record TTL and its MINIMUM field.
+// Only an in-bailiwick SOA (one actually within zone) is trusted, for the
+// same reason referral and glue records are checked elsewhere - an
+// off-path server has no authority to dictate how long we treat an
+// unrelated zone's name as absent.
+func negativeTTL(zone string, ns []dns.RR) time.Duration {
+	for _, rr := range ns {
+		soa, ok := rr.(*dns.SOA)
+		if !ok || !dns.IsSubDomain(zone, soa.Header().Name) {
+			continue
+		}
+		ttl := soa.Hdr.Ttl
+		if soa.Minttl < ttl {
+			ttl = soa.Minttl
+		}
+		return time.Duration(ttl) * time.Second
+	}
+	return defaultNegativeTTL
 }
 
 // nameType groups records by owner name and type, for caching each glue

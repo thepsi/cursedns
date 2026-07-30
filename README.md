@@ -102,6 +102,48 @@ against a fake, in-process client in `resolver/gemini_test.go`, per the
 instruction not to risk a costly bug during development. Test it cautiously
 the first time you run it for real.
 
+## Trace lookup
+
+Any handler can optionally have its per-request trace detail (the same
+information logged to `request completed`) stashed in memory and fetched
+back later over HTTP - useful when a `dig` in one terminal doesn't show
+enough, and you want the full hop-by-hop story afterward. It's off by
+default; turn it on with:
+
+```sh
+./cursedns -listen 127.0.0.1:8053 -handler recursive \
+  -trace-http-listen 127.0.0.1:8080 -trace-capacity 1000
+```
+
+When enabled, every response gets a synthetic TXT record appended to its
+Additional section, owned by the fixed, non-resolvable name
+`_cursedns-trace.invalid.` (under the `.invalid` TLD reserved by RFC 2606,
+so it can never be confused with real, cacheable DNS data), with TTL 0 and
+content set to that request's trace ID:
+
+```sh
+dig @127.0.0.1 -p 8053 example.com A +additional
+# ...
+# _cursedns-trace.invalid. 0 IN TXT "a1b2c3...
+
+curl http://127.0.0.1:8080/trace/a1b2c3...
+```
+
+The `-trace-capacity` most recent traces are kept, least-recently-used
+first to be evicted once full. Enabling this adds roughly 60-90 bytes to
+every response's Additional section, which could push a response that was
+previously just under a tight UDP size budget into truncation (TC bit set,
+client retries over TCP) where it wouldn't have been before.
+
+**Security note:** the trace HTTP endpoint is unauthenticated and returns
+full internal resolution detail - every nameserver contacted and the timing
+of each step - for any trace ID presented to it. The only thing standing
+between a curious third party and another client's query history is that
+trace IDs are unguessable (128 bits of randomness, revealed only to whoever
+received that specific response). That's fine for local development, but
+think carefully before enabling this on a shared or multi-tenant resolver -
+bind `-trace-http-listen` to localhost, or don't enable it at all.
+
 ## TODO
 
 Known gaps in the recursive handler, deferred for now:

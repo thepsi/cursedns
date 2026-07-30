@@ -46,6 +46,13 @@ type Server struct {
 	// slog.Default().
 	Logger *slog.Logger
 
+	// TraceStore, if non-nil, records each request's trace detail (see
+	// Helper.Trace) and appends a synthetic TXT record identifying it to
+	// every response's Extra section, so it can be retrieved later (e.g.
+	// via TraceStore.ServeHTTP). Nil disables the feature entirely: no TXT
+	// record is added, and nothing is stored.
+	TraceStore *TraceStore
+
 	dnsClient *dns.Client
 
 	mu        sync.Mutex
@@ -277,7 +284,7 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 		}
 	}
 
-	s.Logger.Info("request completed",
+	logArgs := []any{
 		"client", clientAddr,
 		"protocol", protocol,
 		"name", question.Name,
@@ -286,7 +293,36 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 		"outcome", outcome,
 		"duration", time.Since(start),
 		"trace", helper.traceLines(),
-	)
+	}
+
+	// A trace TXT record is appended last, deliberately: miekg/dns's
+	// Truncate drops records from the point of overflow to the end of each
+	// section, so appending last means this synthetic record is the first
+	// thing sacrificed under a tight UDP size budget, protecting any real
+	// glue/answer data the handler supplied.
+	if s.TraceStore != nil {
+		id, err := s.TraceStore.Put(TraceRecord{
+			Name:       question.Name,
+			QType:      dns.TypeToString[question.Qtype],
+			RCode:      dns.RcodeToString[reply.Rcode],
+			Outcome:    outcome,
+			ClientAddr: clientAddr.String(),
+			Protocol:   protocol,
+			DurationMS: time.Since(start).Milliseconds(),
+			Trace:      helper.traceLines(),
+		})
+		if err != nil {
+			s.Logger.Warn("failed to record trace, omitting trace TXT", "error", err)
+		} else {
+			reply.Extra = append(reply.Extra, &dns.TXT{
+				Hdr: dns.RR_Header{Name: "_cursedns-trace.invalid.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+				Txt: []string{id},
+			})
+			logArgs = append(logArgs, "trace_id", id)
+		}
+	}
+
+	s.Logger.Info("request completed", logArgs...)
 
 	s.sendReply(req, reply, protocol, respond)
 }

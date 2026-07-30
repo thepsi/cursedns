@@ -6,10 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,10 +44,15 @@ func run() error {
 	geminiModel := flag.String("gemini-model", "gemini-2.5-flash", "Gemini model to use for the gemini handler")
 	geminiMaxTurns := flag.Int("gemini-max-turns", 0, "max model round-trips per request for the gemini handler (0 = handler default)")
 	geminiMaxTokens := flag.Int("gemini-max-tokens", 0, "max cumulative token budget per request for the gemini handler (0 = handler default)")
+	traceHTTPListen := flag.String("trace-http-listen", "", "if set, address:port to serve per-request trace lookups on (GET /trace/{id}); empty disables the feature entirely")
+	traceCapacity := flag.Int("trace-capacity", 1000, "number of recent traces to keep in memory (LRU-evicted) when -trace-http-listen is set")
 	flag.Parse()
 
 	if len(addrs) == 0 {
 		addrs = listenAddrs{"127.0.0.1:5353"}
+	}
+	if *traceHTTPListen != "" && *traceCapacity <= 0 {
+		return fmt.Errorf("invalid -trace-capacity %d: must be positive when -trace-http-listen is set", *traceCapacity)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -109,8 +117,37 @@ func run() error {
 		Logger:         logger,
 	}
 
+	var httpWG sync.WaitGroup
+	if *traceHTTPListen != "" {
+		traceStore := resolver.NewTraceStore(*traceCapacity)
+		server.TraceStore = traceStore
+
+		ln, err := net.Listen("tcp", *traceHTTPListen)
+		if err != nil {
+			return fmt.Errorf("listen http %s: %w", *traceHTTPListen, err)
+		}
+		mux := http.NewServeMux()
+		mux.Handle("GET /trace/{id}", traceStore)
+		httpServer := &http.Server{Handler: mux}
+
+		logger.Info("listening (trace http)", "addr", *traceHTTPListen)
+		httpWG.Add(1)
+		go func() {
+			defer httpWG.Done()
+			if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+				logger.Warn("trace http server error", "error", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			httpServer.Close()
+		}()
+	}
+
 	logger.Info("starting cursedns", "listen", []string(addrs), "timeout", timeout.String())
-	if err := server.ListenAndServe(ctx, addrs); err != nil && ctx.Err() == nil {
+	err := server.ListenAndServe(ctx, addrs)
+	httpWG.Wait()
+	if err != nil && ctx.Err() == nil {
 		return err
 	}
 	return nil

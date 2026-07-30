@@ -1,0 +1,51 @@
+time=2026-07-30T22:49:24.997+01:00 level=INFO msg="request completed" client=127.0.0.1:40477 protocol=udp name=example.com. qtype=A
+
+rcode=SERVFAIL
+outcome="handler error: gemini: exceeded maximum turns (8)"
+duration=37.445341159s
+trace="[
+
+2026-07-30T22:48:47.552324013+01:00 gemini turn 1/8: 0 token(s) used of 100000 budget
+2026-07-30T22:48:49.429566262+01:00 gemini turn 1/8: action=lookup rationale=\"As this is the initial query, I must start by querying the root nameservers for the NS records of the top-level domain 'com.' and the A record of 'example.com.'.\"
+2026-07-30T22:48:49.429586652+01:00 cache miss for com. NS, querying 26 nameserver(s)
+2026-07-30T22:48:49.447155903+01:00 query to a.root-servers.net. (198.41.0.4) returned NOERROR, 0 answer(s), 13 authority, 12 additional
+2026-07-30T22:48:49.447206832+01:00 discarded 12 out-of-bailiwick record(s) from a.root-servers.net. (198.41.0.4)
+2026-07-30T22:48:49.447275244+01:00 cache miss for example.com. A, querying 26 nameserver(s)
+2026-07-30T22:48:49.465658523+01:00 query to a.root-servers.net. (198.41.0.4) returned NOERROR, 0 answer(s), 13 authority, 11 additional
+2026-07-30T22:48:49.465691638+01:00 discarded 11 out-of-bailiwick record(s) from a.root-servers.net. (198.41.0.4)
+
+2026-07-30T22:48:49.465795228+01:00 gemini turn 2/8: 552 token(s) used of 100000 budget
+2026-07-30T22:48:51.91190701+01:00 gemini turn 2/8: action=lookup rationale=\"To resolve example.com., I need to query one of the com. gTLD nameservers, but first I need their IP addresses, so I will query the root for the A record of one of the gTLD nameservers.\"
+2026-07-30T22:48:51.911929694+01:00 cache miss for l.gtld-servers.net. A, querying 26 nameserver(s)
+2026-07-30T22:48:51.930526707+01:00 query to a.root-servers.net. (198.41.0.4) returned NOERROR, 0 answer(s), 13 authority, 12 additional
+
+2026-07-30T22:48:51.930772123+01:00 gemini turn 3/8: 1988 token(s) used of 100000 budget
+2026-07-30T22:48:55.051623601+01:00 gemini turn 3/8: action=lookup rationale=\"I need to find the IP address for a 'com.' nameserver to query for 'example.com.', so I will resolve 'l.gtld-servers.net.' using an IP for a 'net.' nameserver obtained from a previous lookup.\"
+2026-07-30T22:48:55.051643229+01:00 cache miss for l.gtld-servers.net. A, querying 1 nameserver(s)
+2026-07-30T22:48:55.073369349+01:00 query to m.gtld-servers.net. (192.55.83.30) returned NOERROR, 0 answer(s), 4 authority, 0 additional
+
+2026-07-30T22:48:55.073500363+01:00 gemini turn 4/8: 4501 token(s) used of 100000 budget
+2026-07-30T22:49:02.981114791+01:00 gemini turn 4/8: action=lookup rationale=\"To resolve 'l.gtld-servers.net.', I need to query the authoritative nameservers for 'gtld-servers.net.', which are delegated to 'nstld.com.'; therefore, I must first find the nameservers for 'nstld.com.' by querying a 'com.' TLD server.\"
+2026-07-30T22:49:02.981153416+01:00 cache miss for nstld.com. NS, querying 1 nameserver(s)
+2026-07-30T22:49:03.015682266+01:00 query to m.gtld-servers.net. (192.55.83.30) returned NOERROR, 0 answer(s), 4 authority, 8 additional
+
+2026-07-30T22:49:03.015950847+01:00 gemini turn 5/8: 8177 token(s) used of 100000 budget
+2026-07-30T22:49:12.917600186+01:00 gemini turn 5/8: action=lookup rationale=\"I have obtained glue records for the nameservers authoritative for the `gtld-servers.net.` zone, so I can now query them for the A record of `l.gtld-servers.net.` to continue resolving the `com.` delegation.\"
+2026-07-30T22:49:12.917623311+01:00 cache miss for l.gtld-servers.net. A, querying 4 nameserver(s)
+2026-07-30T22:49:12.936250503+01:00 query to av1.nstld.com. (192.42.177.30) returned NOERROR, 1 answer(s), 4 authority, 0 additional
+
+2026-07-30T22:49:12.93641959+01:00 gemini turn 6/8: 12852 token(s) used of 100000 budget
+2026-07-30T22:49:15.565283484+01:00 gemini turn 6/8: action=lookup rationale=\"Now that I have an IP address for a 'com.' TLD nameserver, I will query it for the 'example.com.' A record.\"
+2026-07-30T22:49:15.56530198+01:00 cache miss for example.com. A, querying 1 nameserver(s)
+2026-07-30T22:49:15.591759432+01:00 query to l.gtld-servers.net. (192.41.162.30) returned NOERROR, 0 answer(s), 2 authority, 12 additional
+2026-07-30T22:49:15.591790412+01:00 discarded 12 out-of-bailiwick record(s) from l.gtld-servers.net. (192.41.162.30)
+
+2026-07-30T22:49:15.591901287+01:00 gemini turn 7/8: 16135 token(s) used of 100000 budget
+2026-07-30T22:49:18.842341206+01:00 gemini turn 7/8: action=lookup rationale=\"I received a delegation for 'example.com.' to Cloudflare nameservers from the .com TLD servers, so I need to find the IP addresses of these new nameservers to continue resolution.\"
+2026-07-30T22:49:18.842386874+01:00 cache miss for hera.ns.cloudflare.com. A, querying 1 nameserver(s)
+2026-07-30T22:49:18.866862885+01:00 query to l.gtld-servers.net. (192.41.162.30) returned NOERROR, 0 answer(s), 5 authority, 17 additional
+
+2026-07-30T22:49:18.867024589+01:00 gemini turn 8/8: 19714 token(s) used of 100000 budget
+2026-07-30T22:49:24.978624228+01:00 gemini turn 8/8: action=lookup rationale=\"I need to find the IP address for `hera.ns.cloudflare.com.` by querying one of the `cloudflare.com` nameservers that was provided as glue in the previous lookup.\"
+2026-07-30T22:49:24.978650238+01:00 cache miss for hera.ns.cloudflare.com. A, querying 5 nameserver(s)
+2026-07-30T22:49:24.997242713+01:00 query to ns3.cloudflare.com. (162.159.0.33) returned NOERROR, 3 answer(s), 0 authority, 0 additional]"

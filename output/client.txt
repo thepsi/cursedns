@@ -1,0 +1,16 @@
+simon@ser-ubuntu:~/src/cursedns$ dig @127.0.0.1 -p 8053 +timeout=120 +tries=1 example.com A
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.5-Ubuntu <<>> @127.0.0.1 -p 8053 +timeout=120 +tries=1 example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 24946
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0
+
+;; QUESTION SECTION:
+;example.com.                   IN      A
+
+;; Query time: 37446 msec
+;; SERVER: 127.0.0.1#8053(127.0.0.1) (UDP)
+;; WHEN: Thu Jul 30 22:49:24 BST 2026
+;; MSG SIZE  rcvd: 29

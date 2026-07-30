@@ -135,7 +135,7 @@ func TestGeminiHandler_LookupThenAnswer(t *testing.T) {
 			Answer:    &geminiAnswer{RCode: "NOERROR", Records: []string{"example.com. 300 IN A 93.184.216.34"}},
 		})},
 	}}
-	h := &GeminiHandler{Client: client, Model: "gemini-test"}
+	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxTotalLookups: 3, MaxLookupsPerTurn: 1}
 
 	resp, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err != nil {
@@ -166,6 +166,19 @@ func TestGeminiHandler_LookupThenAnswer(t *testing.T) {
 	first := client.inputs[0]
 	if first.Budget.TurnsRemaining <= second.Budget.TurnsRemaining {
 		t.Fatalf("turns_remaining did not decrease: first=%d second=%d", first.Budget.TurnsRemaining, second.Budget.TurnsRemaining)
+	}
+
+	// The model must be told about the lookup budgets too, not just turns
+	// and tokens - otherwise it has no way to avoid inadvertently
+	// requesting too many lookups and having the whole query fail.
+	if first.Budget.LookupsRemaining != 3 {
+		t.Fatalf("first turn's lookups_remaining = %d, want the configured MaxTotalLookups (3)", first.Budget.LookupsRemaining)
+	}
+	if second.Budget.LookupsRemaining != 2 {
+		t.Fatalf("second turn's lookups_remaining = %d, want 2 (3 minus the one lookup performed)", second.Budget.LookupsRemaining)
+	}
+	if first.Budget.MaxLookupsPerTurn != 1 || second.Budget.MaxLookupsPerTurn != 1 {
+		t.Fatalf("max_lookups_per_turn = %d/%d, want the configured MaxLookupsPerTurn (1) on every turn", first.Budget.MaxLookupsPerTurn, second.Budget.MaxLookupsPerTurn)
 	}
 }
 

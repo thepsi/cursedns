@@ -87,6 +87,8 @@ func (h *GeminiHandler) Handle(ctx context.Context, query Query, helper Helper) 
 			Budget: geminiBudget{
 				TurnsRemaining:       maxTurns - turn,
 				TokenBudgetRemaining: maxTokens - tokensUsed,
+				LookupsRemaining:     lookupsRemaining,
+				MaxLookupsPerTurn:    maxLookupsPerTurn,
 			},
 		}
 		payload, err := json.Marshal(input)
@@ -268,6 +270,8 @@ type geminiQueryInfo struct {
 type geminiBudget struct {
 	TurnsRemaining       int   `json:"turns_remaining"`
 	TokenBudgetRemaining int32 `json:"token_budget_remaining"`
+	LookupsRemaining     int   `json:"lookups_remaining"`
+	MaxLookupsPerTurn    int   `json:"max_lookups_per_turn"`
 }
 
 type geminiLookupRecord struct {
@@ -310,7 +314,7 @@ On each turn, choose exactly one action:
   - "answer": you have enough information to answer the original question. Give the final rcode and any answer records, in standard zone-file text.
   - "error": resolution cannot proceed (e.g. every nameserver failed, or the delegation chain is broken).
 
-Always include a terse, one-sentence rationale for your choice. Be economical with lookups and turns: you have a limited budget of both, given to you each turn, and must produce an answer or error before either runs out.`
+Always include a terse, one-sentence rationale for your choice. Be economical with lookups and turns: you have a limited budget of both, given to you each turn as "budget", and must produce an answer or error before any of it runs out. "budget.turns_remaining" and "budget.token_budget_remaining" bound how many more turns and tokens you have left in total. "budget.lookups_remaining" bounds the total number of individual lookups you may still request across all remaining turns combined - each entry in a "lookup" action's list counts against it. "budget.max_lookups_per_turn" caps how many lookups a single turn's "lookup" action may request at once; requesting more than that in one turn fails the request outright, so batch lookups conservatively and check lookups_remaining before asking for more than you need.`
 
 var geminiResponseSchema = &genai.Schema{
 	Type: genai.TypeObject,

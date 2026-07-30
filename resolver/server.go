@@ -244,10 +244,21 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 		Protocol:   protocol,
 	}
 
+	// Generated unconditionally (not just when TraceStore is enabled) so
+	// every log line for this request - including the summary below - can
+	// be correlated by trace_id, whether or not the HTTP lookup feature is
+	// on. A generation failure is logged and otherwise ignored: it's
+	// astronomically rare, and losing correlation for one request is far
+	// better than failing the request over it.
+	requestID, err := newTraceID()
+	if err != nil {
+		s.Logger.Warn("failed to generate trace id", "error", err)
+	}
+
 	reqCtx, cancel := context.WithTimeout(ctx, s.RequestTimeout)
 	defer cancel()
 
-	helper := newRequestHelper(s.Cache, s.RootHints, s.dnsClient)
+	helper := newRequestHelper(s.Cache, s.RootHints, s.dnsClient, s.Logger, query, requestID)
 
 	type handlerResult struct {
 		resp *Response
@@ -292,7 +303,9 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 		"rcode", dns.RcodeToString[reply.Rcode],
 		"outcome", outcome,
 		"duration", time.Since(start),
-		"trace", helper.traceLines(),
+	}
+	if requestID != "" {
+		logArgs = append(logArgs, "trace_id", requestID)
 	}
 
 	// A trace TXT record is appended last, deliberately: miekg/dns's
@@ -300,8 +313,8 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 	// section, so appending last means this synthetic record is the first
 	// thing sacrificed under a tight UDP size budget, protecting any real
 	// glue/answer data the handler supplied.
-	if s.TraceStore != nil {
-		id, err := s.TraceStore.Put(TraceRecord{
+	if s.TraceStore != nil && requestID != "" {
+		s.TraceStore.Put(requestID, TraceRecord{
 			Name:       question.Name,
 			QType:      dns.TypeToString[question.Qtype],
 			RCode:      dns.RcodeToString[reply.Rcode],
@@ -311,15 +324,10 @@ func (s *Server) handleMessage(ctx context.Context, raw []byte, protocol string,
 			DurationMS: time.Since(start).Milliseconds(),
 			Trace:      helper.traceLines(),
 		})
-		if err != nil {
-			s.Logger.Warn("failed to record trace, omitting trace TXT", "error", err)
-		} else {
-			reply.Extra = append(reply.Extra, &dns.TXT{
-				Hdr: dns.RR_Header{Name: "_cursedns-trace.invalid.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-				Txt: []string{id},
-			})
-			logArgs = append(logArgs, "trace_id", id)
-		}
+		reply.Extra = append(reply.Extra, &dns.TXT{
+			Hdr: dns.RR_Header{Name: "_cursedns-trace.invalid.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{requestID},
+		})
 	}
 
 	s.Logger.Info("request completed", logArgs...)

@@ -8,16 +8,20 @@ import (
 	"testing"
 )
 
+func mustTraceID(t *testing.T) string {
+	t.Helper()
+	id, err := newTraceID()
+	if err != nil {
+		t.Fatalf("newTraceID: %v", err)
+	}
+	return id
+}
+
 func TestTraceStore_PutGetRoundtrip(t *testing.T) {
 	ts := NewTraceStore(10)
 
-	id, err := ts.Put(TraceRecord{Name: "example.com.", QType: "A", RCode: "NOERROR"})
-	if err != nil {
-		t.Fatalf("Put returned error: %v", err)
-	}
-	if id == "" {
-		t.Fatal("Put returned an empty id")
-	}
+	id := mustTraceID(t)
+	ts.Put(id, TraceRecord{Name: "example.com.", QType: "A", RCode: "NOERROR"})
 
 	got, ok := ts.Get(id)
 	if !ok {
@@ -44,9 +48,10 @@ func TestTraceStore_GetUnknownID(t *testing.T) {
 func TestTraceStore_EvictsLeastRecentlyUsedNotOldestInserted(t *testing.T) {
 	ts := NewTraceStore(3)
 
-	idA, _ := ts.Put(TraceRecord{Name: "a."})
-	idB, _ := ts.Put(TraceRecord{Name: "b."})
-	idC, _ := ts.Put(TraceRecord{Name: "c."})
+	idA, idB, idC := mustTraceID(t), mustTraceID(t), mustTraceID(t)
+	ts.Put(idA, TraceRecord{Name: "a."})
+	ts.Put(idB, TraceRecord{Name: "b."})
+	ts.Put(idC, TraceRecord{Name: "c."})
 
 	// Touch A, making B the least recently used of {A, B, C}.
 	if _, ok := ts.Get(idA); !ok {
@@ -54,7 +59,8 @@ func TestTraceStore_EvictsLeastRecentlyUsedNotOldestInserted(t *testing.T) {
 	}
 
 	// Inserting a 4th record overflows capacity (3); B, not A, should be evicted.
-	idD, _ := ts.Put(TraceRecord{Name: "d."})
+	idD := mustTraceID(t)
+	ts.Put(idD, TraceRecord{Name: "d."})
 
 	if _, ok := ts.Get(idB); ok {
 		t.Fatal("expected idB (least recently used) to have been evicted")
@@ -71,14 +77,9 @@ func TestTraceStore_EvictsLeastRecentlyUsedNotOldestInserted(t *testing.T) {
 }
 
 func TestTraceStore_IDsAreWellFormedAndDistinct(t *testing.T) {
-	ts := NewTraceStore(100)
-
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
-		id, err := ts.Put(TraceRecord{Name: "example.com."})
-		if err != nil {
-			t.Fatalf("Put returned error: %v", err)
-		}
+		id := mustTraceID(t)
 		if len(id) != 32 {
 			t.Fatalf("id %q has length %d, want 32 (16 bytes hex-encoded)", id, len(id))
 		}
@@ -94,7 +95,8 @@ func TestTraceStore_IDsAreWellFormedAndDistinct(t *testing.T) {
 
 func TestTraceStore_ServeHTTP(t *testing.T) {
 	ts := NewTraceStore(10)
-	id, _ := ts.Put(TraceRecord{Name: "example.com.", QType: "A", RCode: "NOERROR", Trace: []string{"line one"}})
+	id := mustTraceID(t)
+	ts.Put(id, TraceRecord{Name: "example.com.", QType: "A", RCode: "NOERROR", Trace: []string{"line one"}})
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /trace/{id}", ts)

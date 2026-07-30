@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
@@ -80,16 +81,22 @@ type requestHelper struct {
 	cache     *Cache
 	rootHints []NameServer
 	client    *dns.Client
+	logger    *slog.Logger
+	query     Query
+	id        string
 
 	mu    sync.Mutex
 	lines []string
 }
 
-func newRequestHelper(cache *Cache, rootHints []NameServer, client *dns.Client) *requestHelper {
+func newRequestHelper(cache *Cache, rootHints []NameServer, client *dns.Client, logger *slog.Logger, query Query, id string) *requestHelper {
 	return &requestHelper{
 		cache:     cache,
 		rootHints: rootHints,
 		client:    client,
+		logger:    logger,
+		query:     query,
+		id:        id,
 	}
 }
 
@@ -321,11 +328,32 @@ func (h *requestHelper) RootHints() []NameServer {
 	return h.rootHints
 }
 
+// Trace records one line of trace detail and, if a logger was supplied,
+// logs it immediately - so a live log stream shows each resolution step as
+// it happens, rather than one large concatenated blob once the request
+// finishes. The full sequence for a request remains available afterward via
+// traceLines() (e.g. through TraceStore), so nothing is lost by logging
+// each line individually here rather than accumulating a summary.
 func (h *requestHelper) Trace(format string, args ...any) {
-	line := fmt.Sprintf("%s "+format, append([]any{time.Now().Format(time.RFC3339Nano)}, args...)...)
+	msg := fmt.Sprintf(format, args...)
+
 	h.mu.Lock()
-	h.lines = append(h.lines, line)
+	h.lines = append(h.lines, time.Now().Format(time.RFC3339Nano)+" "+msg)
 	h.mu.Unlock()
+
+	if h.logger != nil {
+		fields := make([]any, 0, 10)
+		if h.id != "" {
+			fields = append(fields, "trace_id", h.id)
+		}
+		fields = append(fields,
+			"name", h.query.Name,
+			"qtype", dns.TypeToString[h.query.Type],
+			"client", h.query.ClientAddr,
+			"protocol", h.query.Protocol,
+		)
+		h.logger.Info(msg, fields...)
+	}
 }
 
 // traceLines returns the trace lines recorded so far.

@@ -27,6 +27,20 @@ type TraceRecord struct {
 	Trace      []string  `json:"trace"`
 }
 
+// newTraceID returns a fresh, unguessable identifier: 16 crypto/rand bytes,
+// hex-encoded. It's used to correlate one request's live log lines and (if
+// a TraceStore is in use) its stored trace record under a single id -
+// unguessability matters here since TraceStore's HTTP endpoint is
+// unauthenticated, so a predictable id would let a third party enumerate
+// other clients' query history.
+func newTraceID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate trace id: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
 // traceEntry is the value held by each list.Element - it pairs the record
 // with its own ID so an evicted element (found via list.Back()) can be
 // removed from the index map too.
@@ -58,19 +72,11 @@ func NewTraceStore(capacity int) *TraceStore {
 	}
 }
 
-// Put generates a fresh, unguessable ID for record, stores it, and returns
-// the ID. If the store is at capacity, the least recently used record is
-// evicted first.
-//
-// The ID is generated before the store's mutex is taken, so a slow
-// crypto/rand call never serializes concurrent Puts against each other.
-func (ts *TraceStore) Put(record TraceRecord) (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("generate trace id: %w", err)
-	}
-	id := hex.EncodeToString(raw[:])
-
+// Put stores record under id (see newTraceID), which the caller generates
+// itself - the same id is typically also used to tag that request's live
+// log lines, so one id correlates both. If the store is at capacity, the
+// least recently used record is evicted first.
+func (ts *TraceStore) Put(id string, record TraceRecord) {
 	record.ID = id
 	record.CreatedAt = time.Now()
 
@@ -87,8 +93,6 @@ func (ts *TraceStore) Put(record TraceRecord) (string, error) {
 			delete(ts.index, oldest.Value.(*traceEntry).id)
 		}
 	}
-
-	return id, nil
 }
 
 // Get returns the record stored under id, if present, marking it as

@@ -81,6 +81,27 @@ dig @127.0.0.1 -p 8053 example.com A +short
 Query it again for the same name and you should see a faster response, since
 the answer (and the delegation chain used to reach it) are now cached.
 
+## Run with the Gemini handler
+
+The Gemini handler hands each query to the Gemini API: the model is given the
+question and the results of every lookup performed so far, as JSON, and must
+respond with either a final answer, an error, or a request to perform further
+lookups before being consulted again. Set an API key first:
+
+```sh
+export GEMINI_API_KEY=...   # or GOOGLE_API_KEY
+./cursedns -listen 127.0.0.1:8053 -handler gemini
+```
+
+`-gemini-model`, `-gemini-max-turns`, and `-gemini-max-tokens` override the
+model name and the per-request turn/token budget (see `-help` for defaults).
+Every request is charged real, billed API usage and makes genuine queries out
+to the live DNS - unlike the other handlers here, **this one was not
+exercised against the real API or the live DNS** while building it, only
+against a fake, in-process client in `resolver/gemini_test.go`, per the
+instruction not to risk a costly bug during development. Test it cautiously
+the first time you run it for real.
+
 ## TODO
 
 Known gaps in the recursive handler, deferred for now:
@@ -100,3 +121,18 @@ Known gaps in the recursive handler, deferred for now:
   referral are always tried in the same, deterministic order, and outbound
   queries don't use 0x20-encoding of the query name - both are common
   real-resolver defenses/load-spreading techniques not implemented here.
+
+Known gap in the Gemini handler:
+
+- **Zone-trust validation for model-requested lookups.** Like the
+  interactive handler, the Gemini handler trusts whatever `zone` the caller
+  (here, the model) asserts for a lookup - `Helper.Lookup`'s bailiwick
+  checking is only as good as that assertion. A human operator typing a
+  wrong zone is one thing; the model's next action is influenced by content
+  it has read out of previous lookup results, including raw data from
+  nameservers on the path to the answer, so a malicious upstream could in
+  principle attempt to talk the model into asserting a broader zone than it
+  actually observed (a DNS-flavored prompt injection). Consider having the
+  harness independently derive/validate zones from observed delegations
+  (as `RecursiveHandler` does) rather than trusting the model's stated zone
+  outright.

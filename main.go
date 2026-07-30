@@ -33,7 +33,7 @@ func run() error {
 	var addrs listenAddrs
 	flag.Var(&addrs, "listen", "address:port to listen on (IPv4 or IPv6, may be given multiple times)")
 	timeout := flag.Duration("timeout", 5*time.Second, "per-request timeout before responding SERVFAIL")
-	handlerName := flag.String("handler", "static", `which Handler to use: "static" (fixed dummy answer) or "interactive" (prompts the operator at this terminal)`)
+	handlerName := flag.String("handler", "static", `which Handler to use: "static" (fixed dummy answer), "interactive" (prompts the operator at this terminal), or "recursive" (real iterative resolution starting from the root)`)
 	staticIPv4 := flag.String("static-ipv4", "127.0.0.1", "IPv4 address returned by the dummy static handler for A queries (empty to disable)")
 	staticIPv6 := flag.String("static-ipv6", "::1", "IPv6 address returned by the dummy static handler for AAAA queries (empty to disable)")
 	staticTTL := flag.Uint("static-ttl", 60, "TTL, in seconds, applied to static handler answers")
@@ -75,6 +75,8 @@ func run() error {
 			// meant for an automated handler.
 			*timeout = 5 * time.Minute
 		}
+	case "recursive":
+		handler = &resolver.RecursiveHandler{}
 	default:
 		return fmt.Errorf("unknown -handler %q", *handlerName)
 	}

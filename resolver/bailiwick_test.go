@@ -275,6 +275,38 @@ func TestFilterInBailiwick_GlueDroppedWhenNoReferralSurvives(t *testing.T) {
 	}
 }
 
+// --- SOA passthrough (negative responses) ---
+
+func TestFilterInBailiwick_SOAInBailiwickKept(t *testing.T) {
+	ns := []dns.RR{mustRR(t, "example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 1 7200 3600 1209600 300")}
+
+	_, filteredNs, _, zone := filterInBailiwick("example.com.", "nonexistent.example.com.", nil, ns, nil)
+
+	if len(filteredNs) != 1 {
+		t.Fatalf("got %d ns record(s), want 1 (the SOA): %v", len(filteredNs), filteredNs)
+	}
+	if _, ok := filteredNs[0].(*dns.SOA); !ok {
+		t.Fatalf("expected the surviving record to be the SOA, got %T", filteredNs[0])
+	}
+	if zone != "" {
+		t.Fatalf("zone = %q, want empty: SOA does not establish a delegated zone", zone)
+	}
+}
+
+// A server trusted only for attacker.com must not be able to attach a SOA
+// for an unrelated zone (bank.com) and have it believed - the same
+// bailiwick principle negativeTTL already applies when deriving a TTL from
+// this same field.
+func TestFilterInBailiwick_SOAOutOfBailiwickDropped(t *testing.T) {
+	ns := []dns.RR{mustRR(t, "bank.com. 3600 IN SOA ns1.bank.com. hostmaster.bank.com. 1 7200 3600 1209600 300")}
+
+	_, filteredNs, _, _ := filterInBailiwick("attacker.com.", "nonexistent.attacker.com.", nil, ns, nil)
+
+	if len(filteredNs) != 0 {
+		t.Fatalf("expected the out-of-bailiwick SOA to be dropped, got %v", filteredNs)
+	}
+}
+
 // --- Case sensitivity ---
 
 // DNS names are case-insensitive, and real resolvers randomize query name

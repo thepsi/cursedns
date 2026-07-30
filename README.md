@@ -59,3 +59,24 @@ Back in the server's terminal you'll see the query printed, followed by a
 ```
 
 `dig` will then print the record you supplied.
+
+## Run with the recursive handler
+
+The recursive handler performs real iterative resolution: starting from the
+IANA root hints, it follows delegations down to an authoritative answer,
+following CNAME chains and bailiwick-checking every referral and glue record
+along the way. Unlike the other two handlers, this one makes genuine queries
+out to the live DNS:
+
+```sh
+./cursedns -listen 127.0.0.1:8053 -handler recursive
+```
+
+Query it like any other resolver:
+
+```sh
+dig @127.0.0.1 -p 8053 example.com A +short
+```
+
+Query it again for the same name and you should see a faster response, since
+the answer (and the delegation chain used to reach it) are now cached.

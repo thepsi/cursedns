@@ -236,7 +236,9 @@ func groupByNameType(rrs []dns.RR) map[nameType][]dns.RR {
 //     is at or below zone, and is name or an ancestor of it — a referral
 //     can only narrow the zone already being trusted, never redirect
 //     outside it;
-//   - extra (glue) records must fall at or below that delegated zone.
+//   - extra (glue) records must fall at or below that delegated zone;
+//   - a SOA record (accompanying a negative response) is kept only if its
+//     owner is at or below zone.
 //
 // It returns the filtered sections along with the delegated zone name
 // found in ns, if any.
@@ -278,23 +280,30 @@ func filterInBailiwick(zone, name string, answer, ns, extra []dns.RR) (filteredA
 	}
 
 	for _, rr := range ns {
-		nsRR, ok := rr.(*dns.NS)
-		if !ok {
-			continue
+		switch rr := rr.(type) {
+		case *dns.NS:
+			owner := rr.Header().Name
+			if !dns.IsSubDomain(zone, owner) {
+				continue // claims authority outside the zone this server was trusted for
+			}
+			if !dns.IsSubDomain(owner, name) {
+				continue // owner is not name or an ancestor of it
+			}
+			if delegatedZone == "" {
+				delegatedZone = owner
+			} else if !strings.EqualFold(owner, delegatedZone) {
+				continue // inconsistent delegation owner within one response
+			}
+			filteredNs = append(filteredNs, rr)
+		case *dns.SOA:
+			// Carries no delegation authority of its own; kept so negative
+			// (NXDOMAIN/NODATA) responses can show the client the same
+			// in-bailiwick SOA that negativeTTL already trusts for TTL
+			// derivation.
+			if dns.IsSubDomain(zone, rr.Header().Name) {
+				filteredNs = append(filteredNs, rr)
+			}
 		}
-		owner := nsRR.Header().Name
-		if !dns.IsSubDomain(zone, owner) {
-			continue // claims authority outside the zone this server was trusted for
-		}
-		if !dns.IsSubDomain(owner, name) {
-			continue // owner is not name or an ancestor of it
-		}
-		if delegatedZone == "" {
-			delegatedZone = owner
-		} else if !strings.EqualFold(owner, delegatedZone) {
-			continue // inconsistent delegation owner within one response
-		}
-		filteredNs = append(filteredNs, rr)
 	}
 
 	if delegatedZone != "" {

@@ -80,3 +80,23 @@ dig @127.0.0.1 -p 8053 example.com A +short
 
 Query it again for the same name and you should see a faster response, since
 the answer (and the delegation chain used to reach it) are now cached.
+
+## TODO
+
+Known gaps in the recursive handler, deferred for now:
+
+- **Truncation / TCP fallback for outbound queries.** `requestHelper.Lookup`
+  sends plain UDP queries to upstream nameservers with no EDNS0 OPT record
+  and never checks the response's TC bit, so a reply too big for a bare
+  512-byte UDP response is silently truncated instead of being retried over
+  TCP. This is a correctness gap, not just an optimization.
+- **Cache-shortcutting past root.** `RecursiveHandler` always starts
+  iteration at the root hints, even when a deeper zone's nameservers are
+  already cached from a previous query. Skipping straight to the deepest
+  known zone would meaningfully cut root/TLD server load on repeat queries,
+  at the cost of extra complexity (resolving cached NS names back to
+  addresses).
+- **Nameserver order/anti-spoofing hardening.** Nameservers within a
+  referral are always tried in the same, deterministic order, and outbound
+  queries don't use 0x20-encoding of the query name - both are common
+  real-resolver defenses/load-spreading techniques not implemented here.

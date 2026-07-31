@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"cursedns/handlers"
 	"cursedns/resolver"
 	"google.golang.org/genai"
 )
@@ -61,7 +62,7 @@ func run() error {
 	var handler resolver.Handler
 	switch *handlerName {
 	case "static":
-		staticHandler := &resolver.StaticHandler{TTL: uint32(*staticTTL)}
+		staticHandler := &handlers.StaticHandler{TTL: uint32(*staticTTL)}
 		if *staticIPv4 != "" {
 			addr, err := netip.ParseAddr(*staticIPv4)
 			if err != nil {
@@ -78,7 +79,7 @@ func run() error {
 		}
 		handler = staticHandler
 	case "interactive":
-		handler = resolver.NewInteractiveHandler(os.Stdin, os.Stdout)
+		handler = handlers.NewInteractiveHandler(os.Stdin, os.Stdout)
 		timeoutSet := false
 		flag.Visit(func(f *flag.Flag) {
 			if f.Name == "timeout" {
@@ -91,7 +92,7 @@ func run() error {
 			*timeout = 5 * time.Minute
 		}
 	case "recursive":
-		handler = &resolver.RecursiveHandler{}
+		handler = &handlers.RecursiveHandler{}
 	case "gemini":
 		// genai.NewClient reads GEMINI_API_KEY (or GOOGLE_API_KEY) from the
 		// environment when ClientConfig is nil.
@@ -99,7 +100,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("creating gemini client (is GEMINI_API_KEY set?): %w", err)
 		}
-		handler = &resolver.GeminiHandler{
+		handler = &handlers.GeminiHandler{
 			Client:         client.Models,
 			Model:          *geminiModel,
 			MaxTurns:       *geminiMaxTurns,

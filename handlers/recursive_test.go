@@ -1,4 +1,4 @@
-package resolver
+package handlers
 
 import (
 	"context"
@@ -9,7 +9,18 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
+
+	"cursedns/resolver"
 )
+
+func mustRR(t *testing.T, s string) dns.RR {
+	t.Helper()
+	rr, err := dns.NewRR(s)
+	if err != nil {
+		t.Fatalf("NewRR(%q): %v", s, err)
+	}
+	return rr
+}
 
 // fakeLookupKey identifies one scripted Lookup call by the parameters that
 // matter for these tests - the nameservers argument is deliberately not
@@ -22,7 +33,7 @@ type fakeLookupKey struct {
 }
 
 type fakeLookupResp struct {
-	result *LookupResult
+	result *resolver.LookupResult
 	err    error
 }
 
@@ -33,9 +44,9 @@ type fakeLookupResp struct {
 // responses, like the hop-limit and CNAME-restart-limit tests).
 type fakeHelper struct {
 	t          *testing.T
-	roots      []NameServer
+	roots      []resolver.NameServer
 	responses  map[fakeLookupKey]fakeLookupResp
-	lookupFunc func(ctx context.Context, name string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error)
+	lookupFunc func(ctx context.Context, name string, qtype uint16, zone string, nameservers []resolver.NameServer) (*resolver.LookupResult, error)
 
 	calls []fakeLookupKey
 }
@@ -43,16 +54,16 @@ type fakeHelper struct {
 func newFakeHelper(t *testing.T) *fakeHelper {
 	return &fakeHelper{
 		t:         t,
-		roots:     []NameServer{{Name: "a.root-servers.net.", Addr: netip.MustParseAddr("198.41.0.4")}},
+		roots:     []resolver.NameServer{{Name: "a.root-servers.net.", Addr: netip.MustParseAddr("198.41.0.4")}},
 		responses: make(map[fakeLookupKey]fakeLookupResp),
 	}
 }
 
-func (f *fakeHelper) script(name string, qtype uint16, zone string, result *LookupResult, err error) {
+func (f *fakeHelper) script(name string, qtype uint16, zone string, result *resolver.LookupResult, err error) {
 	f.responses[fakeLookupKey{name: strings.ToLower(name), qtype: qtype, zone: strings.ToLower(zone)}] = fakeLookupResp{result: result, err: err}
 }
 
-func (f *fakeHelper) Lookup(ctx context.Context, name string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error) {
+func (f *fakeHelper) Lookup(ctx context.Context, name string, qtype uint16, zone string, nameservers []resolver.NameServer) (*resolver.LookupResult, error) {
 	key := fakeLookupKey{name: strings.ToLower(name), qtype: qtype, zone: strings.ToLower(zone)}
 	f.calls = append(f.calls, key)
 
@@ -67,27 +78,27 @@ func (f *fakeHelper) Lookup(ctx context.Context, name string, qtype uint16, zone
 	return resp.result, resp.err
 }
 
-func (f *fakeHelper) RootHints() []NameServer          { return f.roots }
+func (f *fakeHelper) RootHints() []resolver.NameServer { return f.roots }
 func (f *fakeHelper) Trace(format string, args ...any) {}
 
 func TestRecursiveHandler_MultiHopDelegation(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode: dns.RcodeSuccess,
 		Ns:    []dns.RR{mustRR(t, "com. 172800 IN NS a.gtld-servers.net.")},
 		Extra: []dns.RR{mustRR(t, "a.gtld-servers.net. 172800 IN A 192.5.6.30")},
 	}, nil)
-	h.script("example.com.", dns.TypeA, "com.", &LookupResult{
+	h.script("example.com.", dns.TypeA, "com.", &resolver.LookupResult{
 		RCode: dns.RcodeSuccess,
 		Ns:    []dns.RR{mustRR(t, "example.com. 172800 IN NS ns1.example.com.")},
 		Extra: []dns.RR{mustRR(t, "ns1.example.com. 172800 IN A 192.0.2.1")},
 	}, nil)
-	h.script("example.com.", dns.TypeA, "example.com.", &LookupResult{
+	h.script("example.com.", dns.TypeA, "example.com.", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "example.com. 300 IN A 93.184.216.34")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -101,7 +112,7 @@ func TestRecursiveHandler_MultiHopDelegation(t *testing.T) {
 
 func TestRecursiveHandler_InBailiwickCNAMEChainNoRestart(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("www.example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("www.example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode: dns.RcodeSuccess,
 		Answer: []dns.RR{
 			mustRR(t, "www.example.com. 300 IN CNAME app.example.com."),
@@ -109,7 +120,7 @@ func TestRecursiveHandler_InBailiwickCNAMEChainNoRestart(t *testing.T) {
 		},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "www.example.com.", Type: dns.TypeA}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "www.example.com.", Type: dns.TypeA}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -126,16 +137,16 @@ func TestRecursiveHandler_CNAMECrossingZonesRestarts(t *testing.T) {
 	// The previous zone's server can only vouch for the CNAME itself; the
 	// target's data was cut by filterInBailiwick, so only the CNAME comes
 	// back here.
-	h.script("www.example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("www.example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "www.example.com. 300 IN CNAME cdn.other.net.")},
 	}, nil)
-	h.script("cdn.other.net.", dns.TypeA, ".", &LookupResult{
+	h.script("cdn.other.net.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "cdn.other.net. 300 IN A 9.9.9.9")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "www.example.com.", Type: dns.TypeA}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "www.example.com.", Type: dns.TypeA}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -149,21 +160,21 @@ func TestRecursiveHandler_CNAMECrossingZonesRestarts(t *testing.T) {
 
 func TestRecursiveHandler_GluelessReferralResolvesNameserverAddress(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode: dns.RcodeSuccess,
 		Ns:    []dns.RR{mustRR(t, "example.com. 300 IN NS ns1.example.com.")},
 		// No Extra/glue at all.
 	}, nil)
-	h.script("ns1.example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("ns1.example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "ns1.example.com. 300 IN A 192.0.2.1")},
 	}, nil)
-	h.script("example.com.", dns.TypeA, "example.com.", &LookupResult{
+	h.script("example.com.", dns.TypeA, "example.com.", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "example.com. 300 IN A 93.184.216.34")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -174,16 +185,16 @@ func TestRecursiveHandler_GluelessReferralResolvesNameserverAddress(t *testing.T
 
 func TestRecursiveHandler_NXDomainKeepsAccumulatedCNAMEAnswer(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("www.example.com.", dns.TypeA, ".", &LookupResult{
+	h.script("www.example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "www.example.com. 300 IN CNAME ghost.example.org.")},
 	}, nil)
-	h.script("ghost.example.org.", dns.TypeA, ".", &LookupResult{
+	h.script("ghost.example.org.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode: dns.RcodeNameError,
 		Ns:    []dns.RR{mustRR(t, "org. 3600 IN SOA a.iana-servers.net. hostmaster.org. 1 7200 3600 1209600 300")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "www.example.com.", Type: dns.TypeA}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "www.example.com.", Type: dns.TypeA}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -200,12 +211,12 @@ func TestRecursiveHandler_NXDomainKeepsAccumulatedCNAMEAnswer(t *testing.T) {
 
 func TestRecursiveHandler_NoData(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("example.com.", dns.TypeMX, ".", &LookupResult{
+	h.script("example.com.", dns.TypeMX, ".", &resolver.LookupResult{
 		RCode: dns.RcodeSuccess,
 		Ns:    []dns.RR{mustRR(t, "example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 1 7200 3600 1209600 300")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeMX}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeMX}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -246,16 +257,16 @@ func TestRecursiveHandler_HopLimitExceeded(t *testing.T) {
 	name := strings.Join(parts, ".") + ".example.com."
 
 	h := newFakeHelper(t)
-	h.lookupFunc = func(ctx context.Context, qname string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error) {
+	h.lookupFunc = func(ctx context.Context, qname string, qtype uint16, zone string, nameservers []resolver.NameServer) (*resolver.LookupResult, error) {
 		child := labelDeeper(t, name, zone)
-		return &LookupResult{
+		return &resolver.LookupResult{
 			RCode: dns.RcodeSuccess,
 			Ns:    []dns.RR{mustRR(t, fmt.Sprintf("%s 300 IN NS ns.%s", child, child))},
 			Extra: []dns.RR{mustRR(t, fmt.Sprintf("ns.%s 300 IN A 192.0.2.1", child))},
 		}, nil
 	}
 
-	_, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: name, Type: dns.TypeA}, h)
+	_, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: name, Type: dns.TypeA}, h)
 	if err == nil {
 		t.Fatal("expected an error from exceeding the hop limit, got nil")
 	}
@@ -266,15 +277,15 @@ func TestRecursiveHandler_HopLimitExceeded(t *testing.T) {
 
 func TestRecursiveHandler_CNAMERestartLimitExceeded(t *testing.T) {
 	h := newFakeHelper(t)
-	h.lookupFunc = func(ctx context.Context, qname string, qtype uint16, zone string, nameservers []NameServer) (*LookupResult, error) {
+	h.lookupFunc = func(ctx context.Context, qname string, qtype uint16, zone string, nameservers []resolver.NameServer) (*resolver.LookupResult, error) {
 		target := "x" + qname
-		return &LookupResult{
+		return &resolver.LookupResult{
 			RCode:  dns.RcodeSuccess,
 			Answer: []dns.RR{mustRR(t, fmt.Sprintf("%s 300 IN CNAME %s", qname, target))},
 		}, nil
 	}
 
-	_, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "www.example.com.", Type: dns.TypeA}, h)
+	_, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "www.example.com.", Type: dns.TypeA}, h)
 	if err == nil {
 		t.Fatal("expected an error from exceeding the CNAME restart limit, got nil")
 	}
@@ -285,7 +296,7 @@ func TestRecursiveHandler_LookupErrorPropagates(t *testing.T) {
 	wantErr := errors.New("network unreachable")
 	h.script("example.com.", dns.TypeA, ".", nil, wantErr)
 
-	_, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, h)
+	_, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, h)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want it to wrap %v", err, wantErr)
 	}
@@ -293,12 +304,12 @@ func TestRecursiveHandler_LookupErrorPropagates(t *testing.T) {
 
 func TestRecursiveHandler_QueryingCNAMEDirectlyDoesNotRestart(t *testing.T) {
 	h := newFakeHelper(t)
-	h.script("www.example.com.", dns.TypeCNAME, ".", &LookupResult{
+	h.script("www.example.com.", dns.TypeCNAME, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "www.example.com. 300 IN CNAME app.example.com.")},
 	}, nil)
 
-	resp, err := (&RecursiveHandler{}).Handle(context.Background(), Query{Name: "www.example.com.", Type: dns.TypeCNAME}, h)
+	resp, err := (&RecursiveHandler{}).Handle(context.Background(), resolver.Query{Name: "www.example.com.", Type: dns.TypeCNAME}, h)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}

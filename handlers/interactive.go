@@ -1,4 +1,4 @@
-package resolver
+package handlers
 
 import (
 	"bufio"
@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
+
+	"cursedns/resolver"
 )
 
 // InteractiveHandler is a Handler that lets a human operator resolve each
@@ -41,7 +43,7 @@ func NewInteractiveHandler(r io.Reader, w io.Writer) *InteractiveHandler {
 	}
 }
 
-func (h *InteractiveHandler) Handle(ctx context.Context, query Query, helper Helper) (*Response, error) {
+func (h *InteractiveHandler) Handle(ctx context.Context, query resolver.Query, helper resolver.Helper) (*resolver.Response, error) {
 	select {
 	case h.busy <- struct{}{}:
 	default:
@@ -86,10 +88,10 @@ func (h *InteractiveHandler) Handle(ctx context.Context, query Query, helper Hel
 // the sections being built up for the eventual response.
 type interactiveSession struct {
 	ctx    context.Context
-	query  Query
-	helper Helper
+	query  resolver.Query
+	helper resolver.Helper
 	w      io.Writer
-	roots  []NameServer
+	roots  []resolver.NameServer
 
 	pendingAnswer []dns.RR
 	pendingNs     []dns.RR
@@ -99,7 +101,7 @@ type interactiveSession struct {
 // replResult is non-nil once the operator has decided how to conclude the
 // query, either successfully (response set) or with a failure (err set).
 type replResult struct {
-	response *Response
+	response *resolver.Response
 	err      error
 }
 
@@ -209,7 +211,7 @@ func (s *interactiveSession) lookup(args []string) error {
 		return fmt.Errorf("unknown query type %q", qtypeStr)
 	}
 
-	var nameservers []NameServer
+	var nameservers []resolver.NameServer
 	for _, tok := range args[3:] {
 		if strings.EqualFold(tok, "root") {
 			nameservers = append(nameservers, s.roots...)
@@ -247,7 +249,7 @@ func (s *interactiveSession) addRR(target *[]dns.RR, args []string) error {
 	return nil
 }
 
-func (s *interactiveSession) buildResponse(args []string) (*Response, error) {
+func (s *interactiveSession) buildResponse(args []string) (*resolver.Response, error) {
 	if len(args) == 0 {
 		return nil, errors.New(`usage: respond <rcode>, e.g. "respond noerror"`)
 	}
@@ -256,7 +258,7 @@ func (s *interactiveSession) buildResponse(args []string) (*Response, error) {
 		return nil, fmt.Errorf("unknown rcode %q", args[0])
 	}
 
-	return &Response{
+	return &resolver.Response{
 		RCode:  rcode,
 		Answer: s.pendingAnswer,
 		Ns:     s.pendingNs,
@@ -264,7 +266,7 @@ func (s *interactiveSession) buildResponse(args []string) (*Response, error) {
 	}, nil
 }
 
-func parseNameServer(tok string) (NameServer, error) {
+func parseNameServer(tok string) (resolver.NameServer, error) {
 	name, addrStr, hasName := strings.Cut(tok, "@")
 	if !hasName {
 		addrStr = name
@@ -272,9 +274,9 @@ func parseNameServer(tok string) (NameServer, error) {
 	}
 	addr, err := netip.ParseAddr(addrStr)
 	if err != nil {
-		return NameServer{}, fmt.Errorf("invalid nameserver %q: expected \"host@ip\" or an ip: %w", tok, err)
+		return resolver.NameServer{}, fmt.Errorf("invalid nameserver %q: expected \"host@ip\" or an ip: %w", tok, err)
 	}
-	return NameServer{Name: dns.Fqdn(name), Addr: addr}, nil
+	return resolver.NameServer{Name: dns.Fqdn(name), Addr: addr}, nil
 }
 
 func printSection(w io.Writer, label string, rrs []dns.RR) {

@@ -4,6 +4,16 @@ A skeleton recursive DNS server. It handles the networking (UDP/TCP,
 parsing, SERVFAIL on error/timeout) and hands each query to a pluggable
 `resolver.Handler`.
 
+## Layout
+
+- `resolver/` - the core server skeleton: `Server`, `Helper`, `Cache`,
+  `Query`/`Response`/`Handler`, `TraceStore`.
+- `handlers/` - the four `Handler` implementations (`StaticHandler`,
+  `InteractiveHandler`, `RecursiveHandler`, `GeminiHandler`), in their own
+  package specifically so the compiler enforces that they only use
+  `resolver`'s exported API - a handler reaching into `resolver`'s
+  unexported internals simply won't compile.
+
 ## Build
 
 ```sh
@@ -32,7 +42,7 @@ dig @127.0.0.1 -p 8053 example.com A +short
 ## Run with the interactive handler
 
 The interactive handler lets a human resolve each query by hand at this
-terminal (see `resolver/interactive.go` for the full command list: `query`,
+terminal (see `handlers/interactive.go` for the full command list: `query`,
 `roothints`, `lookup`, `add-answer`/`add-ns`/`add-extra`, `respond`, `fail`,
 `help`). The server automatically raises its default per-request timeout to
 5 minutes in this mode, since a human needs longer than the 5s default
@@ -98,7 +108,7 @@ model name and the per-request turn/token budget (see `-help` for defaults).
 Every request is charged real, billed API usage and makes genuine queries out
 to the live DNS - unlike the other handlers here, **this one was not
 exercised against the real API or the live DNS** while building it, only
-against a fake, in-process client in `resolver/gemini_test.go`, per the
+against a fake, in-process client in `handlers/gemini_test.go`, per the
 instruction not to risk a costly bug during development. Test it cautiously
 the first time you run it for real.
 

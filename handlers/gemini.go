@@ -1,4 +1,4 @@
-package resolver
+package handlers
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/miekg/dns"
 	"google.golang.org/genai"
+
+	"cursedns/resolver"
 )
 
 const (
@@ -55,7 +57,7 @@ type GeminiHandler struct {
 	MaxTotalLookups   int
 }
 
-func (h *GeminiHandler) Handle(ctx context.Context, query Query, helper Helper) (*Response, error) {
+func (h *GeminiHandler) Handle(ctx context.Context, query resolver.Query, helper resolver.Helper) (*resolver.Response, error) {
 	maxTurns := h.MaxTurns
 	if maxTurns == 0 {
 		maxTurns = defaultGeminiMaxTurns
@@ -172,7 +174,7 @@ func (h *GeminiHandler) totalLookupsLimit() int {
 // (an unknown qtype, an unparsable nameserver, or the lookup itself
 // erroring) into a recorded error rather than aborting the whole request -
 // the model gets to see the failure and adapt on its next turn.
-func (h *GeminiHandler) performLookup(ctx context.Context, helper Helper, req geminiLookupRequest) geminiLookupRecord {
+func (h *GeminiHandler) performLookup(ctx context.Context, helper resolver.Helper, req geminiLookupRequest) geminiLookupRecord {
 	record := geminiLookupRecord{Request: req}
 
 	qtype, ok := dns.StringToType[strings.ToUpper(req.QType)]
@@ -205,8 +207,8 @@ func (h *GeminiHandler) performLookup(ctx context.Context, helper Helper, req ge
 // geminiResolveNameservers turns the model's nameserver tokens into
 // NameServers, mirroring the interactive handler's "root" or "host@ip"
 // convention (see parseNameServer).
-func geminiResolveNameservers(tokens []string, roots []NameServer) ([]NameServer, error) {
-	var out []NameServer
+func geminiResolveNameservers(tokens []string, roots []resolver.NameServer) ([]resolver.NameServer, error) {
+	var out []resolver.NameServer
 	for _, tok := range tokens {
 		if strings.EqualFold(tok, "root") {
 			out = append(out, roots...)
@@ -221,7 +223,7 @@ func geminiResolveNameservers(tokens []string, roots []NameServer) ([]NameServer
 	return out, nil
 }
 
-func buildGeminiAnswerResponse(answer *geminiAnswer) (*Response, error) {
+func buildGeminiAnswerResponse(answer *geminiAnswer) (*resolver.Response, error) {
 	if answer == nil {
 		return nil, fmt.Errorf("gemini: action=answer but no answer given")
 	}
@@ -239,7 +241,7 @@ func buildGeminiAnswerResponse(answer *geminiAnswer) (*Response, error) {
 		records = append(records, rr)
 	}
 
-	return &Response{RCode: rcode, Answer: records}, nil
+	return &resolver.Response{RCode: rcode, Answer: records}, nil
 }
 
 func rrsToStrings(rrs []dns.RR) []string {

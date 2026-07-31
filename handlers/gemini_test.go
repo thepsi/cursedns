@@ -1,4 +1,4 @@
-package resolver
+package handlers
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 
 	"github.com/miekg/dns"
 	"google.golang.org/genai"
+
+	"cursedns/resolver"
 )
 
 // fakeGeminiTurn scripts one call's response (or error) for fakeGeminiClient.
@@ -85,7 +87,7 @@ func TestGeminiHandler_DirectAnswer(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	resp, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA, Class: dns.ClassINET}, helper)
+	resp, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA, Class: dns.ClassINET}, helper)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -108,7 +110,7 @@ func TestGeminiHandler_ErrorAction(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "all nameservers failed") {
 		t.Fatalf("err = %v, want it to mention the model's reported error", err)
 	}
@@ -116,7 +118,7 @@ func TestGeminiHandler_ErrorAction(t *testing.T) {
 
 func TestGeminiHandler_LookupThenAnswer(t *testing.T) {
 	helper := newFakeHelper(t)
-	helper.script("example.com.", dns.TypeA, ".", &LookupResult{
+	helper.script("example.com.", dns.TypeA, ".", &resolver.LookupResult{
 		RCode:  dns.RcodeSuccess,
 		Answer: []dns.RR{mustRR(t, "example.com. 300 IN A 93.184.216.34")},
 	}, nil)
@@ -137,7 +139,7 @@ func TestGeminiHandler_LookupThenAnswer(t *testing.T) {
 	}}
 	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxTotalLookups: 3, MaxLookupsPerTurn: 1}
 
-	resp, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	resp, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err != nil {
 		t.Fatalf("Handle returned error: %v", err)
 	}
@@ -183,7 +185,7 @@ func TestGeminiHandler_LookupThenAnswer(t *testing.T) {
 }
 
 func TestGeminiResolveNameservers(t *testing.T) {
-	roots := []NameServer{{Name: "a.root-servers.net.", Addr: netip.MustParseAddr("198.41.0.4")}}
+	roots := []resolver.NameServer{{Name: "a.root-servers.net.", Addr: netip.MustParseAddr("198.41.0.4")}}
 
 	got, err := geminiResolveNameservers([]string{"root", "ns1.example.com.@192.0.2.1"}, roots)
 	if err != nil {
@@ -231,7 +233,7 @@ func TestGeminiHandler_TokenBudgetExceeded(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxTokenBudget: 10}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "token budget") {
 		t.Fatalf("err = %v, want a token budget error", err)
 	}
@@ -239,7 +241,7 @@ func TestGeminiHandler_TokenBudgetExceeded(t *testing.T) {
 
 func TestGeminiHandler_MaxTurnsExceeded(t *testing.T) {
 	helper := newFakeHelper(t)
-	helper.script("example.com.", dns.TypeA, ".", &LookupResult{RCode: dns.RcodeSuccess}, nil)
+	helper.script("example.com.", dns.TypeA, ".", &resolver.LookupResult{RCode: dns.RcodeSuccess}, nil)
 
 	lookupTurn := fakeGeminiTurn{tokens: 10, text: mustJSON(t, geminiTurnResponse{
 		Rationale: "keep looking",
@@ -251,7 +253,7 @@ func TestGeminiHandler_MaxTurnsExceeded(t *testing.T) {
 	client := &fakeGeminiClient{t: t, turns: []fakeGeminiTurn{lookupTurn, lookupTurn}}
 	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxTurns: 2}
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "maximum turns") {
 		t.Fatalf("err = %v, want a maximum-turns error", err)
 	}
@@ -274,7 +276,7 @@ func TestGeminiHandler_LookupsPerTurnLimitExceeded(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxLookupsPerTurn: 1}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "exceeding the limit") {
 		t.Fatalf("err = %v, want a per-turn lookup limit error", err)
 	}
@@ -282,7 +284,7 @@ func TestGeminiHandler_LookupsPerTurnLimitExceeded(t *testing.T) {
 
 func TestGeminiHandler_TotalLookupBudgetExceeded(t *testing.T) {
 	helper := newFakeHelper(t)
-	helper.script("a.example.com.", dns.TypeA, ".", &LookupResult{RCode: dns.RcodeSuccess}, nil)
+	helper.script("a.example.com.", dns.TypeA, ".", &resolver.LookupResult{RCode: dns.RcodeSuccess}, nil)
 
 	client := &fakeGeminiClient{t: t, turns: []fakeGeminiTurn{
 		{tokens: 10, text: mustJSON(t, geminiTurnResponse{
@@ -298,7 +300,7 @@ func TestGeminiHandler_TotalLookupBudgetExceeded(t *testing.T) {
 	}}
 	h := &GeminiHandler{Client: client, Model: "gemini-test", MaxTotalLookups: 1}
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "total lookup budget") {
 		t.Fatalf("err = %v, want a total lookup budget error", err)
 	}
@@ -311,7 +313,7 @@ func TestGeminiHandler_MalformedJSONResponse(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "parse model response") {
 		t.Fatalf("err = %v, want a JSON parse error", err)
 	}
@@ -324,7 +326,7 @@ func TestGeminiHandler_UnknownAction(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil || !strings.Contains(err.Error(), "unknown action") {
 		t.Fatalf("err = %v, want an unknown-action error", err)
 	}
@@ -337,7 +339,7 @@ func TestGeminiHandler_EmptyResponseTreatedAsError(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if err == nil {
 		t.Fatal("expected an error for an empty model response, got nil")
 	}
@@ -349,7 +351,7 @@ func TestGeminiHandler_ClientErrorPropagates(t *testing.T) {
 	h := &GeminiHandler{Client: client, Model: "gemini-test"}
 	helper := newFakeHelper(t)
 
-	_, err := h.Handle(context.Background(), Query{Name: "example.com.", Type: dns.TypeA}, helper)
+	_, err := h.Handle(context.Background(), resolver.Query{Name: "example.com.", Type: dns.TypeA}, helper)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want it to wrap %v", err, wantErr)
 	}

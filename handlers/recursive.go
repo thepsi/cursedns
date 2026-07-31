@@ -1,4 +1,4 @@
-package resolver
+package handlers
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
+
+	"cursedns/resolver"
 )
 
 const (
@@ -38,7 +40,7 @@ const (
 // authoritative answer, using Helper.Lookup as its single building block.
 type RecursiveHandler struct{}
 
-func (h *RecursiveHandler) Handle(ctx context.Context, query Query, helper Helper) (*Response, error) {
+func (h *RecursiveHandler) Handle(ctx context.Context, query resolver.Query, helper resolver.Helper) (*resolver.Response, error) {
 	budget := maxTotalLookups
 
 	name := query.Name
@@ -55,12 +57,12 @@ func (h *RecursiveHandler) Handle(ctx context.Context, query Query, helper Helpe
 			// nothing further to chase) - pass through its authority
 			// section (e.g. SOA) so the client sees the same negative
 			// answer we cached it under.
-			return &Response{RCode: result.RCode, Answer: answer, Ns: result.Ns}, nil
+			return &resolver.Response{RCode: result.RCode, Answer: answer, Ns: result.Ns}, nil
 		}
 
 		target, needsRestart := unresolvedCNAMETarget(result.Answer, name, query.Type)
 		if !needsRestart {
-			return &Response{RCode: dns.RcodeSuccess, Answer: answer}, nil
+			return &resolver.Response{RCode: dns.RcodeSuccess, Answer: answer}, nil
 		}
 
 		helper.Trace("restarting resolution from root for %s (left previous zone via CNAME)", target)
@@ -75,8 +77,8 @@ func (h *RecursiveHandler) Handle(ctx context.Context, query Query, helper Helpe
 // time. It does not itself follow CNAME chains across zone boundaries -
 // that is handled by Handle, which restarts resolution for a new name when
 // needed.
-func resolveIterative(ctx context.Context, helper Helper, name string, qtype uint16, budget *int, depth int) (*LookupResult, error) {
-	zone := RootZone
+func resolveIterative(ctx context.Context, helper resolver.Helper, name string, qtype uint16, budget *int, depth int) (*resolver.LookupResult, error) {
+	zone := resolver.RootZone
 	nameservers := helper.RootHints()
 
 	for hop := 0; hop < maxHops; hop++ {
@@ -126,23 +128,23 @@ func resolveIterative(ctx context.Context, helper Helper, name string, qtype uin
 // nameserver's address was either not supplied or rejected as
 // out-of-bailiwick by filterInBailiwick), it resolves one nameserver's
 // address itself via a fresh, independent resolution starting at root.
-func resolveNameservers(ctx context.Context, helper Helper, ns, extra []dns.RR, budget *int, depth int) ([]NameServer, error) {
+func resolveNameservers(ctx context.Context, helper resolver.Helper, ns, extra []dns.RR, budget *int, depth int) ([]resolver.NameServer, error) {
 	names := uniqueNSNames(ns)
 
-	var out []NameServer
+	var out []resolver.NameServer
 	for _, name := range names {
 		for _, rr := range extra {
 			switch rr := rr.(type) {
 			case *dns.A:
 				if strings.EqualFold(rr.Header().Name, name) {
 					if addr, ok := netip.AddrFromSlice(rr.A); ok {
-						out = append(out, NameServer{Name: name, Addr: addr})
+						out = append(out, resolver.NameServer{Name: name, Addr: addr})
 					}
 				}
 			case *dns.AAAA:
 				if strings.EqualFold(rr.Header().Name, name) {
 					if addr, ok := netip.AddrFromSlice(rr.AAAA); ok {
-						out = append(out, NameServer{Name: name, Addr: addr})
+						out = append(out, resolver.NameServer{Name: name, Addr: addr})
 					}
 				}
 			}
@@ -167,7 +169,7 @@ func resolveNameservers(ctx context.Context, helper Helper, ns, extra []dns.RR, 
 		for _, rr := range result.Answer {
 			if a, ok := rr.(*dns.A); ok {
 				if addr, ok := netip.AddrFromSlice(a.A); ok {
-					out = append(out, NameServer{Name: name, Addr: addr})
+					out = append(out, resolver.NameServer{Name: name, Addr: addr})
 				}
 			}
 		}
@@ -180,6 +182,22 @@ func resolveNameservers(ctx context.Context, helper Helper, ns, extra []dns.RR, 
 		return nil, fmt.Errorf("could not resolve an address for any nameserver in %v: %w", names, lastErr)
 	}
 	return nil, fmt.Errorf("could not resolve an address for any nameserver in %v", names)
+}
+
+// hasNS reports whether rrs contains any NS record - used to distinguish a
+// referral (continue the delegation walk) from a genuine NODATA result
+// (Ns, if present, is just a passed-through SOA). A local copy of the same
+// predicate resolver uses internally for its own, unrelated purpose
+// (negative-cache classification): it operates purely on the exported
+// []dns.RR, so duplicating six lines here is cheaper and more honest than
+// widening resolver's exported API for it.
+func hasNS(rrs []dns.RR) bool {
+	for _, rr := range rrs {
+		if _, ok := rr.(*dns.NS); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // delegationOwner returns the owner name of the first NS record in ns

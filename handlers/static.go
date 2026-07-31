@@ -1,10 +1,12 @@
-package resolver
+package handlers
 
 import (
 	"context"
 	"net/netip"
 
 	"github.com/miekg/dns"
+
+	"cursedns/resolver"
 )
 
 // StaticHandler is a dummy Handler for testing the server skeleton: it
@@ -22,7 +24,7 @@ type StaticHandler struct {
 	TTL uint32
 }
 
-func (h *StaticHandler) Handle(ctx context.Context, query Query, helper Helper) (*Response, error) {
+func (h *StaticHandler) Handle(ctx context.Context, query resolver.Query, helper resolver.Helper) (*resolver.Response, error) {
 	helper.Trace("static handler answering %s %s", query.Name, dns.TypeToString[query.Type])
 
 	hdr := dns.RR_Header{
@@ -47,7 +49,7 @@ func (h *StaticHandler) Handle(ctx context.Context, query Query, helper Helper) 
 		helper.Trace("no static answer configured for qtype %s", dns.TypeToString[query.Type])
 	}
 
-	return &Response{
+	return &resolver.Response{
 		RCode:  dns.RcodeSuccess,
 		Answer: answer,
 	}, nil

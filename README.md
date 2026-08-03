@@ -20,9 +20,11 @@ parsing, SERVFAIL on error/timeout) and hands each query to a pluggable
 go build -o cursedns .
 ```
 
-The examples below use port 8053 rather than cursedns's actual default
-(5353), since 5353 is the standard mDNS port and is commonly already bound
-by something like `avahi-daemon` or `systemd-resolved`.
+The examples below use port 8053, which is also cursedns's default - so
+`-listen` can be omitted entirely if that's all you need. (The obvious
+choice, port 53, needs root/CAP_NET_BIND_SERVICE; 5353 is the standard mDNS
+port and is commonly already bound by something like `avahi-daemon` or
+`systemd-resolved`.)
 
 ## Run with the static handler
 
@@ -30,7 +32,7 @@ The static handler is a dummy that answers every A/AAAA query with a fixed
 address. It's the default, so no `-handler` flag is needed:
 
 ```sh
-./cursedns -listen 127.0.0.1:8053
+./cursedns
 ```
 
 Query it:
@@ -49,7 +51,7 @@ terminal (see `handlers/interactive.go` for the full command list: `query`,
 aimed at automated handlers:
 
 ```sh
-./cursedns -listen 127.0.0.1:8053 -handler interactive
+./cursedns -handler interactive
 ```
 
 In another terminal, query it. `dig` normally gives up (and retries) after
@@ -79,7 +81,7 @@ along the way. Unlike the other two handlers, this one makes genuine queries
 out to the live DNS:
 
 ```sh
-./cursedns -listen 127.0.0.1:8053 -handler recursive
+./cursedns -handler recursive
 ```
 
 Query it like any other resolver:
@@ -100,7 +102,7 @@ lookups before being consulted again. Set an API key first:
 
 ```sh
 export GEMINI_API_KEY=...   # or GOOGLE_API_KEY
-./cursedns -listen 127.0.0.1:8053 -handler gemini
+./cursedns -handler gemini
 ```
 
 `-gemini-model`, `-gemini-max-turns`, and `-gemini-max-tokens` override the
@@ -121,7 +123,7 @@ enough, and you want the full hop-by-hop story afterward. It's off by
 default; turn it on with:
 
 ```sh
-./cursedns -listen 127.0.0.1:8053 -handler recursive \
+./cursedns -handler recursive \
   -trace-http-listen 127.0.0.1:8080 -trace-capacity 1000
 ```
 

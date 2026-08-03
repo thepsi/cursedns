@@ -50,7 +50,7 @@ func run() error {
 	flag.Parse()
 
 	if len(addrs) == 0 {
-		addrs = listenAddrs{"127.0.0.1:5353"}
+		addrs = listenAddrs{"127.0.0.1:8053"}
 	}
 	if *traceHTTPListen != "" && *traceCapacity <= 0 {
 		return fmt.Errorf("invalid -trace-capacity %d: must be positive when -trace-http-listen is set", *traceCapacity)

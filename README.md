@@ -162,9 +162,16 @@ Known gaps in the recursive handler, deferred for now:
 
 - **Truncation / TCP fallback for outbound queries.** `requestHelper.Lookup`
   sends plain UDP queries to upstream nameservers with no EDNS0 OPT record
-  and never checks the response's TC bit, so a reply too big for a bare
-  512-byte UDP response is silently truncated instead of being retried over
-  TCP. This is a correctness gap, not just an optimization.
+  and never checks the response's TC bit, so a truncated reply is silently
+  treated as a genuine (and then cached) empty/NODATA answer instead of
+  being retried over TCP. This isn't just a large-response edge case: some
+  authoritative servers deliberately set TC and return nothing over UDP for
+  particular queries - most notably `ANY` - regardless of how small the real
+  answer would be, as an anti-spoofing/anti-amplification measure (a spoofed
+  source can't complete the TCP handshake needed to receive the real
+  answer). Confirmed live against `mx.broken.lol ANY`, whose nameserver
+  does exactly this for a 119-byte answer. This is a correctness gap, not
+  just an optimization.
 - **Cache-shortcutting past root.** `RecursiveHandler` always starts
   iteration at the root hints, even when a deeper zone's nameservers are
   already cached from a previous query. Skipping straight to the deepest
@@ -175,6 +182,16 @@ Known gaps in the recursive handler, deferred for now:
   referral are always tried in the same, deterministic order, and outbound
   queries don't use 0x20-encoding of the query name - both are common
   real-resolver defenses/load-spreading techniques not implemented here.
+- **RFC 8482 handling for client `ANY` queries.** `RecursiveHandler` treats
+  `ANY` like any other qtype and forwards it upstream as-is, so the client's
+  answer depends entirely on how each upstream authoritative server chooses
+  to handle it - a full RRset, a synthesized minimal HINFO record, or (per
+  the truncation gap above) nothing at all. RFC 8482 recommends a resolver
+  answer `ANY` with a minimal response itself rather than pass it through;
+  doing that here would mean synthesizing our own HINFO-style answer for
+  client `ANY` queries (or resolving a single representative type instead)
+  rather than relying on upstream behavior, sidestepping the truncation
+  issue for this qtype entirely rather than fixing it generally.
 
 Known gap in the Gemini handler:
 
